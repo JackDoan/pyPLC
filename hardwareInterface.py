@@ -1,3 +1,4 @@
+from threading import Thread
 
 # For serial (including USB-to-serial) interfaces:
 # https://pyserial.readthedocs.io/en/latest/pyserial.html
@@ -6,11 +7,13 @@
 # List ports:
 #   python -m serial.tools.list_ports
 
-import serial # the pyserial
+import paho.mqtt.client as mqtt
+import serial  # the pyserial
+from paho.mqtt import subscribe
 from serial.tools.list_ports import comports
 from time import sleep, time
 from configmodule import getConfigValue, getConfigValueBool
-import sys # For exit_on_session_end hack
+import sys  # For exit_on_session_end hack
 
 PinCp = "P8_18"
 PinPowerRelay = "P8_16"
@@ -33,9 +36,9 @@ class hardwareInterface():
         if (getConfigValue("analog_input_device")=="dieter"):
             return True # a "dieter" input device is expected to be connected on serial port.
         if (getConfigValue("digital_output_device")=="celeron55device"):
-            return True
+            pass # return True
         if (getConfigValue("analog_input_device")=="celeron55device"):
-            return True
+            pass # return True
         return False # non of the functionalities need a serial port.
         
     def findSerialPort(self):
@@ -87,66 +90,70 @@ class hardwareInterface():
 
     def setStateB(self):
         self.addToTrace("Setting CP line into state B.")
+        self.mqttc.publish("plc/cp_line", "B")
         if (getConfigValue("digital_output_device")=="beaglebone"):
             GPIO.output(PinCp, GPIO.LOW)
         if (getConfigValue("digital_output_device")=="celeron55device"):
-            self.ser.write(bytes("cp=0\n", "utf-8"))
+            pass # self.ser.write(bytes("cp=0\n", "utf-8"))
         self.outvalue &= ~1
         
     def setStateC(self):
         self.addToTrace("Setting CP line into state C.")
+        self.mqttc.publish("plc/cp_line", "C")
         if (getConfigValue("digital_output_device")=="beaglebone"):
             GPIO.output(PinCp, GPIO.HIGH)
         if (getConfigValue("digital_output_device")=="celeron55device"):
-            self.ser.write(bytes("cp=1\n", "utf-8"))
+            pass # self.ser.write(bytes("cp=1\n", "utf-8"))
         self.outvalue |= 1
         
     def setPowerRelayOn(self):
         self.addToTrace("Switching PowerRelay ON.")
+        self.mqttc.publish("plc/contactor/main", "on")
         if (getConfigValue("digital_output_device")=="beaglebone"):
             GPIO.output(PinPowerRelay, GPIO.HIGH)
         if (getConfigValue("digital_output_device")=="celeron55device"):
-            self.ser.write(bytes("contactor=1\n", "utf-8"))
+            pass # self.ser.write(bytes("contactor=1\n", "utf-8"))
         self.outvalue |= 2
 
     def setPowerRelayOff(self):
         self.addToTrace("Switching PowerRelay OFF.")
+        self.mqttc.publish("plc/contactor/main", "off")
         if (getConfigValue("digital_output_device")=="beaglebone"):
             GPIO.output(PinPowerRelay, GPIO.LOW)
         if (getConfigValue("digital_output_device")=="celeron55device"):
-            self.ser.write(bytes("contactor=0\n", "utf-8"))
+            pass # self.ser.write(bytes("contactor=0\n", "utf-8"))
         self.outvalue &= ~2
 
     def setRelay2On(self):
         self.addToTrace("Switching Relay2 ON.")
+        self.mqttc.publish("plc/contactor/secondary", "on")
         self.outvalue |= 4
 
     def setRelay2Off(self):
         self.addToTrace("Switching Relay2 OFF.")
+        self.mqttc.publish("plc/contactor/secondary", "off")
         self.outvalue &= ~4
         
     def getPowerRelayConfirmation(self):
-        if (getConfigValue("digital_output_device")=="celeron55device"):
-            return self.contactor_confirmed
-        return 1 # todo: self.contactor_confirmed
+        return self.contactor_confirmed
         
     def triggerConnectorLocking(self):
         self.addToTrace("Locking the connector")
+        self.mqttc.publish("plc/pluglock", "locked")
         if (getConfigValue("digital_output_device")=="celeron55device"):
-            self.ser.write(bytes("lock\n", "utf-8"))
+            pass # self.ser.write(bytes("lock\n", "utf-8"))
         # todo control the lock motor into lock direction until the end (time based or current based stopping?)
 
     def triggerConnectorUnlocking(self):
         self.addToTrace("Unocking the connector")
+        self.mqttc.publish("plc/pluglock", "unlocked")
         if (getConfigValue("digital_output_device")=="celeron55device"):
-            self.ser.write(bytes("unlock\n", "utf-8"))
+            pass # self.ser.write(bytes("unlock\n", "utf-8"))
         # todo control the lock motor into unlock direction until the end (time based or current based stopping?)
 
     def isConnectorLocked(self):
         # TODO: Read the lock= value from the hardware so that this works
-        #if (getConfigValue("digital_output_device")=="celeron55device"):
-        #    return self.lock_confirmed
-        return 1 # todo: use the real connector lock feedback
+        return 1
         
     def setChargerParameters(self, maxVoltage, maxCurrent):
         self.maxChargerVoltage = int(maxVoltage)
@@ -166,12 +173,6 @@ class hardwareInterface():
         return self.inletVoltage
         
     def getAccuVoltage(self):
-        if (getConfigValue("digital_output_device")=="celeron55device"):
-            return self.accuVoltage
-        elif getConfigValue("charge_parameter_backend")=="chademo":
-           return self.accuVoltage
-        #todo: get real measured voltage from the accu
-        self.accuVoltage = 230
         return self.accuVoltage
 
     def getAccuMaxCurrent(self):
@@ -192,10 +193,7 @@ class hardwareInterface():
         if getConfigValue("charge_parameter_backend")=="chademo":
             return self.accuMaxVoltage #set by CAN
         elif getConfigValue("charge_target_voltage"):
-            self.accuMaxVoltage = getConfigValue("charge_target_voltage")            
-        else:
-            #todo: get max charging voltage from the BMS
-            self.accuMaxVoltage = 230
+            self.accuMaxVoltage = getConfigValue("charge_target_voltage")
         return self.accuMaxVoltage
 
     def getIsAccuFull(self):
@@ -239,12 +237,23 @@ class hardwareInterface():
             # Port configuration according to https://github.com/jsphuebner/pyPLC/commit/475f7fe9f3a67da3d4bd9e6e16dfb668d0ddb1d6
             GPIO.setup(PinPowerRelay, GPIO.OUT) #output for port relays
             GPIO.setup(PinCp, GPIO.OUT) #output for CP
-        
-    def __init__(self, callbackAddToTrace=None, callbackShowStatus=None, homeplughandler=None):
+
+    def mqttsub(self, topics: list[str], callback: callable, qos: int = 0):
+        t = Thread(
+            target=subscribe.callback,
+            args=(callback, topics,),
+            kwargs={
+                "auth":{'username': "elpis", 'password': "adventure"},
+                "hostname":'100.69.1.105',
+                "userdata": self}
+        )
+        t.start()
+
+    def __init__(self, mqttc: mqtt.Client, callbackAddToTrace=None, callbackShowStatus=None, homeplughandler=None):
         self.callbackAddToTrace = callbackAddToTrace
         self.callbackShowStatus = callbackShowStatus
         self.homeplughandler = homeplughandler
-
+        self.mqttc = mqttc
         self.loopcounter = 0
         self.outvalue = 0
         self.simulatedSoc = 20.0 # percent
@@ -279,7 +288,22 @@ class hardwareInterface():
 
         self.findSerialPort()
         self.initPorts()
-        
+
+        self.mqttsub([
+            "plc/params/accuvoltage",
+            "plc/params/dc_link_v",
+            "plc/params/accuMaxCurrent", "plc/params/max_charge_a",
+            "plc/params/accuMaxVoltage", "plc/params/charge_target_voltage",
+            "plc/params/inlet_voltage",
+            "plc/params/soc_percent",
+            "plc/params/cp_pwm",
+            "plc/params/cp_output_state",
+            "plc/params/contactor_confirmed",
+            "plc/params/plugged_in",
+        ], mqttcallback)
+
+
+
     def resetSimulation(self):
         self.simulatedInletVoltage = 0.0 # volts
         self.simulatedSoc = 20.0 # percent
@@ -310,77 +334,13 @@ class hardwareInterface():
                 self.rxbuffer = self.rxbuffer[x+3:] # consume the receive buffer entry
 
     def evaluateReceivedData_celeron55device(self, s):
-        self.rxbuffer += s
-        while True:
-            x = self.rxbuffer.find("\n")
-            if x < 0:
-                break
-            line = self.rxbuffer[0:x].strip()
-            self.rxbuffer = self.rxbuffer[x+1:]
-            #self.addToTrace("Received line: \""+line+"\"")
-            if line.startswith("inlet_v="):
-                self.inletVoltage = int(line[8:])
-                if self.logged_inlet_voltage != self.inletVoltage:
-                    self.logged_inlet_voltage = self.inletVoltage
-                    self.addToTrace("<< inlet_voltage="+str(self.inletVoltage))
-                if self.callbackShowStatus:
-                    self.callbackShowStatus(format(self.inletVoltage,".1f"), "uInlet")
-            elif line.startswith("dc_link_v="):
-                self.accuVoltage = int(line[10:])
-                if self.logged_dc_link_voltage != self.accuVoltage:
-                    self.logged_dc_link_voltage = self.accuVoltage
-                    self.addToTrace("<< dc_link_voltage="+str(self.accuVoltage))
-            elif line.startswith("cp_pwm="):
-                self.cp_pwm = int(line[7:])
-                if self.logged_cp_pwm != self.cp_pwm:
-                    self.logged_cp_pwm = self.cp_pwm
-                    self.addToTrace("<< cp_pwm="+str(self.cp_pwm))
-            elif line.startswith("cp_output_state="):
-                state = int(line[len("cp_output_state="):])
-                if bool(state) == ((self.outvalue & 1)!=0):
-                    self.addToTrace("<< CP state confirmed")
-                else:
-                    self.addToTrace("<< CP state MISMATCH")
-            elif line.startswith("ccs_contactor_wanted_closed="):
-                state = int(line[len("ccs_contactor_wanted_closed="):])
-                if bool(state) == ((self.outvalue & 2)!=0):
-                    self.addToTrace("<< Contactor request confirmed")
-                else:
-                    self.addToTrace("<< Contactor request MISMATCH")
-            elif line.startswith("max_charge_a="):
-                self.accuMaxCurrent = int(line[13:])
-                if self.logged_max_charge_a != self.accuMaxCurrent:
-                    self.logged_max_charge_a = self.accuMaxCurrent
-                    self.addToTrace("<< max_charge_a="+str(self.accuMaxCurrent))
-            elif line.startswith("soc_percent="):
-                self.soc_percent = int(line[12:])
-                if self.logged_soc_percent != self.soc_percent:
-                    self.logged_soc_percent = self.soc_percent
-                    self.addToTrace("<< soc_percent="+str(self.soc_percent))
-            elif line.startswith("contactor_confirmed="):
-                self.contactor_confirmed = bool(int(line[20:]))
-                if self.logged_contactor_confirmed != self.contactor_confirmed:
-                    self.logged_contactor_confirmed = self.contactor_confirmed
-                    self.addToTrace("<< contactor_confirmed="+str(self.contactor_confirmed))
-            elif line.startswith("plugged_in="):
-                self.plugged_in = bool(int(line[11:]))
-                if self.logged_plugged_in != self.plugged_in:
-                    self.logged_plugged_in = self.plugged_in
-                    self.addToTrace("<< plugged_in="+str(self.plugged_in))
-            else:
-                self.addToTrace("Received unknown line: \""+line+"\"")
+        pass
 
     def showOnDisplay(self, s1, s2, s3):
-        # show the given string s on the display which is connected to the serial port
-        if (getConfigValueBool("display_via_serial") and self.isSerialInterfaceOk):
-            if (getConfigValue("digital_output_device")=="celeron55device"):
-                s = "disp0=" + s1 + "\n" + "disp1=" + s2 + "\n" + "disp2=" + s3 + "\n"
-                self.ser.write(bytes(s, "utf-8"))
-            else:
-                s = "lc" + s1 + "\n" + "lc" + s2 + "\n" + "lc" + s3 + "\n"
-                self.ser.write(bytes(s, "utf-8"))
+        pass
         
     def mainfunction(self):
+        # print(self.soc_percent)
         if (getConfigValueBool("soc_simulation")):
             if (self.simulatedSoc<100):
                 if ((self.outvalue & 2)!=0):
@@ -425,15 +385,7 @@ class hardwareInterface():
                 self.evaluateReceivedData_dieter(s)
 
     def mainfunction_celeron55device(self):
-        if (self.isSerialInterfaceOk):
-            s = self.ser.read(100)
-            if (len(s)>0):
-                try:
-                    s = str(s, 'utf-8')
-                except:
-                    s = "" # for the case we received corrupted data (not convertable as utf-8)
-                #self.addToTrace(str(len(s)) + " bytes received: " + s)
-                self.evaluateReceivedData_celeron55device(s)
+        pass
                 
     def mainfunction_chademo(self):
        message = self.canbus.recv(0)
@@ -477,9 +429,35 @@ class hardwareInterface():
            if self.accuMaxCurrent != 0:
               self.addToTrace("CHAdeMO: No current limit update for over 1s, setting current to 0")
            self.accuMaxCurrent = 0
-        
+
+
 def myPrintfunction(s):
     print("myprint " + s)
+
+
+def mqttcallback(client: mqtt.Client, cls: hardwareInterface, message):
+    cls.callbackAddToTrace("%s %s" % (message.topic, message.payload))
+    print("%s %s" % (message.topic, message.payload))
+    if message.topic in ["plc/params/accuVoltage", "plc/params/dc_link_v"]:
+        cls.accuVoltage = int(message.payload)
+    if message.topic in ["plc/params/accuMaxCurrent", "plc/params/max_charge_a"]:
+        cls.accuMaxCurrent = int(message.payload)
+    if message.topic in ["plc/params/accuMaxVoltage", "plc/params/charge_target_voltage"]:
+        cls.accuMaxVoltage = int(message.payload)
+    if message.topic == "plc/params/inlet_voltage":
+        cls.inletVoltage = float(message.payload)
+    if message.topic == "plc/params/soc_percent":
+        cls.soc_percent = int(message.payload)
+    if message.topic == "plc/params/cp_pwm":
+        pass
+    if message.topic == "plc/params/cp_output_state":
+        pass
+    if message.topic == "plc/params/contactor_confirmed":
+        cls.contactor_confirmed = bool(message.payload)
+    if message.topic == "plc/params/plugged_in":
+        cls.plugged_in = bool(message.payload)
+
+
 
 if __name__ == "__main__":
     print("Testing hardwareInterface...")

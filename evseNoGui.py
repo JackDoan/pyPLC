@@ -2,6 +2,7 @@
 # The non-GUI variant of the EVSE side
 
 import time
+import paho.mqtt.client as mqtt
 import pyPlcWorker
 from configmodule import getConfigValue, getConfigValueBool
 from pyPlcModes import *
@@ -59,12 +60,11 @@ myMode = C_EVSE_MODE
 print("starting in EVSE_MODE")
 print("press Ctrl-C to exit")
 
-worker=pyPlcWorker.pyPlcWorker(cbAddToTrace, cbShowStatus, myMode, 0, socStatusCallback)
+worker = pyPlcWorker.pyPlcWorker(cbAddToTrace, cbShowStatus, myMode, 0, socStatusCallback)
 
 nMainloops=0
-while (1):
-    time.sleep(.03) # 'do some calculation'
-    nMainloops+=1
+
+while 1:
+    time.sleep(.03)
+    nMainloops += 1
     worker.mainfunction()
-        
-#---------------------------------------------------------------

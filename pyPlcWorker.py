@@ -4,8 +4,9 @@
 #   - Windows10 with python 3.9 and
 #   - Raspbian with python 3.9
 #
-
-#------------------------------------------------------------
+import paho.mqtt
+import paho.mqtt.client
+# from paho.mqtt.client import enums
 import pyPlcHomeplug
 import fsmEvse
 import fsmPev
@@ -18,8 +19,16 @@ import connMgr
 
 
 class pyPlcWorker():
-    def __init__(self, callbackAddToTrace=None, callbackShowStatus=None, mode=C_EVSE_MODE, isSimulationMode=0, callbackSoC=None):
+    def __init__(self, callbackAddToTrace=None, callbackShowStatus=None, mode=C_EVSE_MODE, isSimulationMode=0, callbackSoC=None, ):
         print("initializing pyPlcWorker")
+        mqttc = paho.mqtt.client.Client()
+        mqttc.enable_logger()
+        mqttc.username_pw_set('elpis', 'adventure')
+        mqttc.connect("100.69.1.105", 1883, 60)
+        mqttc.loop_start()
+        out = mqttc.publish("plc/test", "hello!")
+        print(out)
+        self.mqttc = mqttc
         self.nMainFunctionCalls=0
         self.mode = mode
         self.strUserAction = ""
@@ -31,7 +40,7 @@ class pyPlcWorker():
         self.isSimulationMode = isSimulationMode
         self.connMgr = connMgr.connMgr(self.workerAddToTrace, self.showStatus)
         self.hp = pyPlcHomeplug.pyPlcHomeplug(self.workerAddToTrace, self.showStatus, self.mode, self.addressManager, self.connMgr, self.isSimulationMode)
-        self.hardwareInterface = hardwareInterface.hardwareInterface(self.workerAddToTrace, self.showStatus, self.hp)
+        self.hardwareInterface = hardwareInterface.hardwareInterface(self.mqttc, self.workerAddToTrace, self.showStatus, self.hp)
         self.hp.printToUdp("pyPlcWorker init")
         # Find out the version number, using git.
         # see https://stackoverflow.com/questions/14989858/get-the-current-git-hash-in-a-python-script
